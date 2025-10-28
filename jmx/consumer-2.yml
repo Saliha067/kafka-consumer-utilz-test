@@ -1,0 +1,47 @@
+startDelaySeconds: 0
+hostPort: consumer2:10002
+lowercaseOutputName: false
+lowercaseOutputLabelNames: false
+whitelistObjectNames:
+  - "kafka.consumer:*"
+rules:
+  # Assigned partitions - rename and add group_id
+  - pattern: 'kafka.consumer<type=consumer-coordinator-metrics, client-id=(.+)><>assigned-partitions'
+    name: consumer_assigned_partitions
+    labels:
+      client_id: "$1"
+      group_id: "demo-group"
+    type: GAUGE
+  
+  # Records lag max
+  - pattern: 'kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+), topic=(.+), partition=(.+)><>records-lag-max'
+    name: consumer_records_lag_max
+    labels:
+      client_id: "$1"
+      topic: "$2"
+      partition: "$3"
+      group_id: "demo-group"
+    type: GAUGE
+  
+  # Records consumed rate per topic (MUST come before general pattern)
+  - pattern: 'kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+), topic=(.+)><>records-consumed-rate'
+    name: consumer_topic_records_consumed_rate
+    labels:
+      client_id: "$1"
+      topic: "$2"
+      group_id: "demo-group"
+    type: GAUGE
+  
+  # Records consumed rate (general - comes after specific)
+  - pattern: 'kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+)><>records-consumed-rate'
+    name: consumer_records_consumed_rate
+    labels:
+      client_id: "$1"
+    type: GAUGE
+  
+  # Other useful coordinator metrics
+  - pattern: 'kafka.consumer<type=consumer-coordinator-metrics, client-id=(.+)><>(commit-latency-avg|commit-latency-max|commit-rate|heartbeat-rate|join-rate|sync-rate)'
+    name: consumer_coordinator_$2
+    labels:
+      client_id: "$1"
+    type: GAUGE

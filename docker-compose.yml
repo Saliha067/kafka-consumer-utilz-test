@@ -1,0 +1,496 @@
+# Kafka Multi-Node Cluster for Consumer Utilization & Partition Imbalance Testing
+#
+# PROBLEM STATEMENT:
+# Testing consumer scaling efficiency and partition-to-consumer assignment
+# - Verify if consumer instances > partitions leads to idle consumers
+# - Measure partition assignment balance across consumer group
+# - Identify if lag persists due to partition imbalance vs insufficient compute
+#
+# TEST SETUP:
+# - demo-topic: 20 partitions, RF=2 (for testing various consumer counts)
+# - demo-producer: Rate-limited 10 msgs/sec (prevents disk fill-up)
+# - consumer1-6: 6 demo consumers with JMX metrics for utilization analysis
+# - Grafana dashboards: Monitor partition assignment, lag, and throughput per consumer
+#
+# QUICK START:
+#   docker compose up -d                              # Start core + producer only
+#   docker compose --profile monitoring up -d         # Start with all 6 consumers
+#   docker compose up -d consumer1 consumer2          # Test with 2 consumers
+#   docker compose up -d consumer1 consumer2 consumer3 consumer4 # Test with 4 consumers
+#   ./scripts/imbalance.sh under                      # Helper: 1 consumer scenario
+#   ./scripts/imbalance.sh over                       # Helper: >partitions scenario
+#   ./scripts/imbalance.sh clean                      # Clean up everything
+#
+# TEST SCENARIOS:
+#   1. Under-provisioned: 1-2 consumers for 20 partitions (expect high load per consumer)
+#   2. Balanced: 4-5 consumers for 20 partitions (expect even distribution)
+#   3. Over-provisioned: 6+ consumers for 20 partitions (expect idle consumers)
+#
+# METRICS TO OBSERVE:
+#   - records-consumed-rate per consumer (should be >0 for active, 0 for idle)
+#   - records-lag per partition (should decrease with proper scaling)
+#   - partition assignment count per consumer (should be balanced)
+#   - CPU/Memory utilization per consumer instance
+#
+# ACCESS:
+#   - Kafka UI: http://localhost:8080 (view partition assignments)
+#   - Grafana: http://localhost:3000 (admin/admin - consumer utilization dashboards)
+#   - Prometheus: http://localhost:9090 (raw metrics)
+#
+networks:
+  kafka-net:
+    driver: bridge
+
+volumes:
+  kafka-data:
+    driver: local
+
+services:
+  kafka-1:
+    image: apache/kafka:4.0.0 # Apache Kafka 4.0.0 Docker image
+    hostname: kafka-1
+    container_name: kafka-1
+
+    ports:
+      - "9092:9092" # External listener for clients
+      - "9093:9093" # Internal listener for KRaft controller communication
+      - "9991:9991"  # JMX
+
+    volumes:
+      - ./kafka1-storage:/tmp/kafka-logs # Map host folder to container data path
+
+    networks:
+      - kafka-net
+
+    environment:
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_NODE_ID: 1
+      CLUSTER_ID: 'rH--UilUT42lPpihUhzlZw'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-1:9093'
+      KAFKA_LISTENERS: 'BROKER://kafka-1:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://kafka-1:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'BROKER://kafka-1:29092,EXTERNAL://localhost:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'BROKER'
+      KAFKA_LOG_DIRS: '/tmp/kafka-logs' # Where Kafka stores its log data and KRaft metadata # Explicitly set log directory for consistency with volume mount
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false' # Disable auto topic creation
+      KAFKA_LOG_RETENTION_HOURS: '1' # Retain logs for 1 hour (adjust as needed)
+      KAFKA_LOG_RETENTION_BYTES: '1073741824' # Max 1GB per partition (adjust as needed)
+      KAFKA_LOG_SEGMENT_BYTES: '104857600' # 100MB segments
+      KAFKA_LOG_CLEANUP_POLICY: 'delete' # Delete old segments
+      # ---- JMX (dev/no auth) ----
+      KAFKA_OPTS: >-
+        -Dcom.sun.management.jmxremote
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=9991
+        -Dcom.sun.management.jmxremote.rmi.port=9991
+        -Djava.rmi.server.hostname=kafka-1
+
+  kafka-2:
+    image: apache/kafka:4.0.0 # Apache Kafka 4.0.0 Docker image
+    hostname: kafka-2
+    container_name: kafka-2
+
+    ports:
+      - "9094:9092" # External listener for clients
+      - "9992:9992"  # JMX
+
+    networks:
+      - kafka-net
+
+    volumes:
+      - ./kafka2-storage:/tmp/kafka-logs
+    
+    depends_on:
+      - kafka-1
+    
+    environment:
+      KAFKA_PROCESS_ROLES: 'broker'
+      KAFKA_NODE_ID: 2
+      CLUSTER_ID: 'rH--UilUT42lPpihUhzlZw'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-1:9093'
+      KAFKA_LISTENERS: 'BROKER://kafka-2:29092,EXTERNAL://0.0.0.0:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'BROKER://kafka-2:29092,EXTERNAL://localhost:9094'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'BROKER'
+      KAFKA_LOG_DIRS: '/tmp/kafka-logs' # Where Kafka stores its log data and KRaft metadata # Explicitly set log directory for consistency with volume mount
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false' # Disable auto topic creation
+      KAFKA_LOG_RETENTION_HOURS: '1' # Retain logs for 1 hour
+      KAFKA_LOG_RETENTION_BYTES: '1073741824' # Max 1GB per partition
+      KAFKA_LOG_SEGMENT_BYTES: '104857600' # 100MB segments
+      KAFKA_LOG_CLEANUP_POLICY: 'delete' # Delete old segments
+      KAFKA_OPTS: >-
+        -Dcom.sun.management.jmxremote
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=9992
+        -Dcom.sun.management.jmxremote.rmi.port=9992
+        -Djava.rmi.server.hostname=kafka-2
+
+  kafka-3:
+    image: apache/kafka:4.0.0 # Apache Kafka 4.0.0 Docker image
+    hostname: kafka-3
+    container_name: kafka-3
+
+    ports:
+      - "9095:9092" # External listener for clients
+      - "9993:9993"  # JMX
+
+    networks:
+      - kafka-net
+
+    volumes:
+      - ./kafka3-storage:/tmp/kafka-logs
+    
+    depends_on:
+      - kafka-1
+    
+    environment:
+      KAFKA_PROCESS_ROLES: 'broker'
+      KAFKA_NODE_ID: 3
+      CLUSTER_ID: 'rH--UilUT42lPpihUhzlZw'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka-1:9093'
+      KAFKA_LISTENERS: 'BROKER://kafka-3:29092,EXTERNAL://0.0.0.0:9092'
+      KAFKA_ADVERTISED_LISTENERS: 'BROKER://kafka-3:29092,EXTERNAL://localhost:9095'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'BROKER'
+      KAFKA_LOG_DIRS: '/tmp/kafka-logs' # Where Kafka stores its log data and KRaft metadata # Explicitly set log directory for consistency with volume mount
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false' # Disable auto topic creation
+      KAFKA_LOG_RETENTION_HOURS: '1' # Retain logs for 1 hour
+      KAFKA_LOG_RETENTION_BYTES: '1073741824' # Max 1GB per partition
+      KAFKA_LOG_SEGMENT_BYTES: '104857600' # 100MB segments
+      KAFKA_LOG_CLEANUP_POLICY: 'delete' # Delete old segments
+      KAFKA_OPTS: >-
+        -Dcom.sun.management.jmxremote
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=9993
+        -Dcom.sun.management.jmxremote.rmi.port=9993
+        -Djava.rmi.server.hostname=kafka-3
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: pro-kafka-ui
+    networks:
+      - kafka-net
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    environment:
+      KAFKA_CLUSTERS_0_NAME: 'multi-node-cluster'
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: 'kafka-1:29092,kafka-2:29092,kafka-3:29092'
+
+  # ======= JMX Exporters for brokers (use bitnami image) =======
+  jmx-kafka-1:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-kafka-1
+    networks: [kafka-net]
+    depends_on: [kafka-1]
+    command: ["9401", "/config/broker-1.yml"]
+    volumes:
+      - ./jmx/broker-1.yml:/config/broker-1.yml:ro
+    ports: ["9401:9401"]
+
+  jmx-kafka-2:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-kafka-2
+    networks: [kafka-net]
+    depends_on: [kafka-2]
+    command: ["9402", "/config/broker-2.yml"]
+    volumes:
+      - ./jmx/broker-2.yml:/config/broker-2.yml:ro
+    ports: ["9402:9402"]
+
+  jmx-kafka-3:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-kafka-3
+    networks: [kafka-net]
+    depends_on: [kafka-3]
+    command: ["9403", "/config/broker-3.yml"]
+    volumes:
+      - ./jmx/broker-3.yml:/config/broker-3.yml:ro
+    ports: ["9403:9403"]
+
+  # ======= Topic Creator =======
+  topic-creator:
+    image: apache/kafka:4.0.0
+    container_name: topic-creator
+    networks: [kafka-net]
+    depends_on: [kafka-1, kafka-2, kafka-3]
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --create --if-not-exists --topic demo-topic --partitions 20 --replication-factor 2 --config retention.ms=3600000;
+        echo "Topic created: demo-topic (20 partitions, RF=2) - Ready for consumer utilization testing";
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --describe --topic demo-topic;
+        sleep infinity
+    restart: "no"
+
+  # ======= Demo Producer (Rate-Limited) =======
+  demo-producer:
+    image: apache/kafka:4.0.0
+    container_name: demo-producer
+    networks: [kafka-net]
+    depends_on: [kafka-1, kafka-2, kafka-3, topic-creator]
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        echo "Starting producer (1000+ msgs/sec to demo-topic - sustained high load)...";
+        i=0; while true; do 
+          for j in {1..50}; do
+            echo "msg-$$i ts=$$(date +%s) payload-$$RANDOM$$RANDOM$$RANDOM$$RANDOM"; 
+            i=$$((i+1)); 
+          done
+          sleep 0.05; 
+        done | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka-1:29092 --topic demo-topic
+
+  # ======= Test Consumers with JMX (for measuring utilization & partition assignment) =======
+  
+  consumer1:
+    image: apache/kafka:4.0.0
+    container_name: consumer1
+    networks: [kafka-net]
+    depends_on: [kafka-1, topic-creator]
+    profiles: ["monitoring"]
+    environment:
+      JMX_PORT: "10001"
+      KAFKA_JMX_OPTS: >-
+        -Dcom.sun.management.jmxremote=true
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=10001
+        -Dcom.sun.management.jmxremote.rmi.port=10001
+        -Djava.rmi.server.hostname=consumer1
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        echo "Consumer1 starting - will report partition assignment and consumption rate";
+        /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic demo-topic --group demo-group --consumer-property client.id=console-consumer-1 --from-beginning
+    ports: ["10001:10001"]
+
+  jmx-consumer1:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-consumer1
+    networks: [kafka-net]
+    depends_on: [consumer1]
+    profiles: ["monitoring"]
+    command: ["9405", "/config/consumer-1.yml"]
+    volumes:
+      - ./jmx/consumer-1.yml:/config/consumer-1.yml:ro
+    ports: ["9405:9405"]
+
+  consumer2:
+    image: apache/kafka:4.0.0
+    container_name: consumer2
+    networks: [kafka-net]
+    depends_on: [kafka-1, topic-creator]
+    profiles: ["monitoring"]
+    environment:
+      JMX_PORT: "10002"
+      KAFKA_JMX_OPTS: >-
+        -Dcom.sun.management.jmxremote=true
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=10002
+        -Dcom.sun.management.jmxremote.rmi.port=10002
+        -Djava.rmi.server.hostname=consumer2
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        echo "Consumer2 starting - will report partition assignment and consumption rate";
+        /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic demo-topic --group demo-group --consumer-property client.id=console-consumer-2 --from-beginning
+    ports: ["10002:10002"]
+
+  jmx-consumer2:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-consumer2
+    networks: [kafka-net]
+    depends_on: [consumer2]
+    profiles: ["monitoring"]  # Only start with: docker-compose --profile monitoring up
+    command: ["9406", "/config/consumer-2.yml"]
+    volumes:
+      - ./jmx/consumer-2.yml:/config/consumer-2.yml:ro
+    ports: ["9406:9406"]
+
+  consumer3:
+    image: apache/kafka:4.0.0
+    container_name: consumer3
+    networks: [kafka-net]
+    depends_on: [kafka-1, topic-creator]
+    profiles: ["monitoring"]
+    environment:
+      JMX_PORT: "10003"
+      KAFKA_JMX_OPTS: >-
+        -Dcom.sun.management.jmxremote=true
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=10003
+        -Dcom.sun.management.jmxremote.rmi.port=10003
+        -Djava.rmi.server.hostname=consumer3
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        echo "Consumer3 starting - will report partition assignment and consumption rate";
+        /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic demo-topic --group demo-group --consumer-property client.id=console-consumer-3 --from-beginning
+    ports: ["10003:10003"]
+
+  jmx-consumer3:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-consumer3
+    networks: [kafka-net]
+    depends_on: [consumer3]
+    profiles: ["monitoring"]
+    command: ["9407", "/config/consumer-3.yml"]
+    volumes:
+      - ./jmx/consumer-3.yml:/config/consumer-3.yml:ro
+    ports: ["9407:9407"]
+
+  consumer4:
+    image: apache/kafka:4.0.0
+    container_name: consumer4
+    networks: [kafka-net]
+    depends_on: [kafka-1, topic-creator]
+    profiles: ["monitoring"]
+    environment:
+      JMX_PORT: "10004"
+      KAFKA_JMX_OPTS: >-
+        -Dcom.sun.management.jmxremote=true
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=10004
+        -Dcom.sun.management.jmxremote.rmi.port=10004
+        -Djava.rmi.server.hostname=consumer4
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        echo "Consumer4 starting - will report partition assignment and consumption rate";
+        /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic demo-topic --group demo-group --consumer-property client.id=console-consumer-4 --from-beginning
+    ports: ["10004:10004"]
+
+  jmx-consumer4:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-consumer4
+    networks: [kafka-net]
+    depends_on: [consumer4]
+    profiles: ["monitoring"]
+    command: ["9408", "/config/consumer-4.yml"]
+    volumes:
+      - ./jmx/consumer-4.yml:/config/consumer-4.yml:ro
+    ports: ["9408:9408"]
+
+  consumer5:
+    image: apache/kafka:4.0.0
+    container_name: consumer5
+    networks: [kafka-net]
+    depends_on: [kafka-1, topic-creator]
+    profiles: ["monitoring"]
+    environment:
+      JMX_PORT: "10005"
+      KAFKA_JMX_OPTS: >-
+        -Dcom.sun.management.jmxremote=true
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=10005
+        -Dcom.sun.management.jmxremote.rmi.port=10005
+        -Djava.rmi.server.hostname=consumer5
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        echo "Consumer5 starting - will report partition assignment and consumption rate";
+        /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic demo-topic --group demo-group --consumer-property client.id=console-consumer-5 --from-beginning
+    ports: ["10005:10005"]
+
+  jmx-consumer5:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-consumer5
+    networks: [kafka-net]
+    depends_on: [consumer5]
+    profiles: ["monitoring"]
+    command: ["9409", "/config/consumer-5.yml"]
+    volumes:
+      - ./jmx/consumer-5.yml:/config/consumer-5.yml:ro
+    ports: ["9409:9409"]
+
+  consumer6:
+    image: apache/kafka:4.0.0
+    container_name: consumer6
+    networks: [kafka-net]
+    depends_on: [kafka-1, topic-creator]
+    profiles: ["monitoring"]
+    environment:
+      JMX_PORT: "10006"
+      KAFKA_JMX_OPTS: >-
+        -Dcom.sun.management.jmxremote=true
+        -Dcom.sun.management.jmxremote.local.only=false
+        -Dcom.sun.management.jmxremote.authenticate=false
+        -Dcom.sun.management.jmxremote.ssl=false
+        -Dcom.sun.management.jmxremote.port=10006
+        -Dcom.sun.management.jmxremote.rmi.port=10006
+        -Djava.rmi.server.hostname=consumer6
+    entrypoint: ["/bin/bash","-lc"]
+    command:
+      - >
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:29092 --list >/dev/null 2>&1; do sleep 1; done;
+        echo "Consumer6 starting - will report partition assignment and consumption rate";
+        /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka-1:29092 --topic demo-topic --group demo-group --consumer-property client.id=console-consumer-6 --from-beginning
+    ports: ["10006:10006"]
+
+  jmx-consumer6:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-consumer6
+    networks: [kafka-net]
+    depends_on: [consumer6]
+    profiles: ["monitoring"]
+    command: ["9410", "/config/consumer-6.yml"]
+    volumes:
+      - ./jmx/consumer-6.yml:/config/consumer-6.yml:ro
+    ports: ["9410:9410"]
+
+  # ======= Prometheus & Grafana =======
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    networks: [kafka-net]
+    depends_on:
+      - jmx-kafka-1
+      - jmx-kafka-2
+      - jmx-kafka-3
+      # Note: jmx-consumer1 and jmx-consumer2 are optional (use --profile monitoring)
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    networks: [kafka-net]
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]

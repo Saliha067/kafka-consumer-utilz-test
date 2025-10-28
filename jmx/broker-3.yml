@@ -1,0 +1,8 @@
+startDelaySeconds: 0
+hostPort: kafka-3:9993
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  - pattern: "kafka.server<type=KafkaServer, name=BrokerState><>Value"
+  - pattern: "kafka.server<type=ReplicaManager, name=UnderReplicatedPartitions><>Value"
+  - pattern: "kafka.server<type=BrokerTopicMetrics, name=(.+)PerSec, topic=(.*)><>Count"

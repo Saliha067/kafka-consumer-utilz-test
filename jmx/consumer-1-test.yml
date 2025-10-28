@@ -1,0 +1,9 @@
+startDelaySeconds: 0
+hostPort: consumer1:10001
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+whitelistObjectNames:
+  - "kafka.consumer:*"
+rules:
+  # Catch everything to see what's available
+  - pattern: ".*"

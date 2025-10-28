@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "broker-1"
+    static_configs: [{ targets: ["jmx-kafka-1:9401"] }]
+  - job_name: "broker-2"
+    static_configs: [{ targets: ["jmx-kafka-2:9402"] }]
+  - job_name: "broker-3"
+    static_configs: [{ targets: ["jmx-kafka-3:9403"] }]
+
+  - job_name: "consumer1"
+    static_configs: [{ targets: ["jmx-consumer1:9405"] }]
+
+  - job_name: "consumer2"
+    static_configs: [{ targets: ["jmx-consumer2:9406"] }]
+
+  - job_name: "consumer3"
+    static_configs: [{ targets: ["jmx-consumer3:9407"] }]
+
+  - job_name: "consumer4"
+    static_configs: [{ targets: ["jmx-consumer4:9408"] }]
+
+  - job_name: "consumer5"
+    static_configs: [{ targets: ["jmx-consumer5:9409"] }]
+
+  - job_name: "consumer6"
+    static_configs: [{ targets: ["jmx-consumer6:9410"] }]
+
