@@ -191,7 +191,7 @@ services:
 
   # ======= JMX Exporters for brokers (use bitnami image) =======
   jmx-kafka-1:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-kafka-1
     networks: [kafka-net]
     depends_on: [kafka-1]
@@ -201,7 +201,7 @@ services:
     ports: ["9401:9401"]
 
   jmx-kafka-2:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-kafka-2
     networks: [kafka-net]
     depends_on: [kafka-2]
@@ -211,7 +211,7 @@ services:
     ports: ["9402:9402"]
 
   jmx-kafka-3:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-kafka-3
     networks: [kafka-net]
     depends_on: [kafka-3]
@@ -282,7 +282,7 @@ services:
     ports: ["10001:10001"]
 
   jmx-consumer1:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-consumer1
     networks: [kafka-net]
     depends_on: [consumer1]
@@ -317,7 +317,7 @@ services:
     ports: ["10002:10002"]
 
   jmx-consumer2:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-consumer2
     networks: [kafka-net]
     depends_on: [consumer2]
@@ -352,7 +352,7 @@ services:
     ports: ["10003:10003"]
 
   jmx-consumer3:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-consumer3
     networks: [kafka-net]
     depends_on: [consumer3]
@@ -387,7 +387,7 @@ services:
     ports: ["10004:10004"]
 
   jmx-consumer4:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-consumer4
     networks: [kafka-net]
     depends_on: [consumer4]
@@ -422,7 +422,7 @@ services:
     ports: ["10005:10005"]
 
   jmx-consumer5:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-consumer5
     networks: [kafka-net]
     depends_on: [consumer5]
@@ -457,7 +457,7 @@ services:
     ports: ["10006:10006"]
 
   jmx-consumer6:
-    image: bitnami/jmx-exporter:latest
+    image: soldevelo/jmx-exporter:latest
     container_name: jmx-consumer6
     networks: [kafka-net]
     depends_on: [consumer6]
